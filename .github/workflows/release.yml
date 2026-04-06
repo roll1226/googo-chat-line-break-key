@@ -50,9 +50,10 @@ jobs:
             icons/
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@c062e08bd532815e2082a7e09ce9571a6d1144cd # v2.2.1
-        with:
-          tag_name: ${{ steps.tag.outputs.name }}
-          files: googo-chat-line-break-key-${{ steps.tag.outputs.name }}.zip
-          generate_release_notes: true
-          fail_on_unmatched_files: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.name }}
+        run: |
+          gh release create "${TAG}" \
+            --generate-notes \
+            "googo-chat-line-break-key-${TAG}.zip"
