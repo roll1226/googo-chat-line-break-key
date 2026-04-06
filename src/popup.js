@@ -112,7 +112,7 @@ function loadSetting() {
  * @param {Event} event - The 'change' event fired by the radio button.
  */
 function handleChange(event) {
-  const selectedKey = event.target.value;
+  const selectedKey = sanitizeLineBreakKey(event.target.value);
   syncSelectedClass();
   chrome.storage.sync.set({ lineBreakKey: selectedKey }, () => {
     showStatus('保存しました ✓');
