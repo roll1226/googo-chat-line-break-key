@@ -50,7 +50,7 @@ icons/            ← 拡張機能アイコン
 注目点が2つあります。
 
 1. **`run_at: "document_start"`** — ページ読み込みの最初期にスクリプトを注入します。Google ChatのJavaScriptが動き出す前にキャプチャハンドラを登録するためです（理由は後述）。
-2. **`all_frames: true`** — Google Chatはiframeを多用するため、iframe内にもスクリプトを適用します。
+2. **`all_frames: true`** — Google ChatやGmailは内部で複数フレームを利用することがあるため、入力エリアがどのフレームに配置されても対応できるよう、match条件に一致する子フレームにもコンテンツスクリプトを注入します。
 
 データフローはシンプルです。
 
@@ -88,7 +88,7 @@ icons/            ← 拡張機能アイコン
          └─ Window
 ```
 
-通常の`addEventListener("keydown", handler)`はバブリング位相で動作します。Google ChatもEnterキーの「送信」処理をバブリング位相に登録しています。
+通常の`addEventListener("keydown", handler)`はバブリング位相で動作します。現時点のGoogle Chatでは、Enter送信処理が通常のイベント伝播で処理されていることが確認できます。
 
 **問題：** コンテンツスクリプトがバブリングで`event.preventDefault()`を呼んでも、Google ChatのハンドラがDOM内の深い位置に登録されていると、それより先にGoogle Chatが処理してしまいます。
 
@@ -104,7 +104,7 @@ window.addEventListener("keydown", handleKeyDown, true);
 > *通常（バブリング）: Google Chatが先に処理 → 送信されてしまう*  
 > *キャプチャ位相: content.jsが先に処理 → stopImmediatePropagation()で止める*
 
-Windowのキャプチャ位相はイベント伝播の最初に呼ばれます。さらに`event.stopImmediatePropagation()`を呼ぶことで、同じ要素の後続ハンドラも含めてすべての伝播を停止できます。
+Windowでキャプチャ登録することで、イベント伝播のかなり早い段階でキー入力を傍受できます。さらに`event.stopImmediatePropagation()`を呼ぶことで、同じイベントに対する後続リスナーの実行を抑制し、以降のイベント伝播も停止できます。
 
 ```js
 function handleKeyDown(event) {
@@ -120,7 +120,7 @@ function handleKeyDown(event) {
 window.addEventListener("keydown", handleKeyDown, true); // キャプチャ位相
 ```
 
-また`run_at: "document_start"`で最早タイミングに注入することで、Google ChatのJavaScript自体がキャプチャ位相にハンドラを登録していたとしても、当拡張機能のハンドラが確実に先に登録されます（同フェーズでは登録順に呼ばれる）。
+また`run_at: "document_start"`で最早タイミングに注入することで、Google Chat側のイベントハンドラより先に登録できる可能性が高く、Enter処理を先に傍受しやすくなります。なお、Content ScriptはIsolated World（分離世界）で動作するため、同フェーズの登録順序はブラウザの実装に依存します。
 
 ### 改行の挿入方法
 
@@ -132,7 +132,7 @@ function insertNewline() {
 }
 ```
 
-`execCommand`は仕様上「非推奨」ですが、**Reactベースのエディタにはこれがもっとも確実な方法**です。Reactは合成イベントシステムを持つため、DOM操作で直接テキストを書き換えてもReactの内部状態が追いつかず、次回送信時に編集内容が消えることがあります。`execCommand("insertText")`はブラウザネイティブの`input`イベントを発火させるため、Reactも正しく追従できます。
+`execCommand`は仕様上「非推奨」ですが、Google Chatのような`contenteditable`ベースのリッチテキストエディタでは、`execCommand("insertText")`が`beforeinput`/`input`イベントフローと相性が良く、実用上もっとも安定して動作しました。DOM操作で直接テキストを書き換えてもこれらのイベントは発火しないため、エディタの内部状態がずれ、次回送信時に編集内容が消えることがあります。Chrome系ブラウザでは、`execCommand("insertText")`により`beforeinput`や`input`が発火することが多く、Google Chatのような大規模WebアプリでもUI更新との整合性を保ちやすくなります。
 
 ---
 
@@ -158,7 +158,7 @@ function handleKeyDown(event) {
 }
 ```
 
-なぜ`event.keyCode === 229`も合わせてチェックするのか。`keyCode 229`はIMEが処理中のキーイベントに対してChromeの旧バージョンが設定していたレガシーな値です。`isComposing`が信頼できるのはChrome 56以降であり、旧バージョン向けの互換コードとして残しています。実質的な影響は少ないですが、**2行追加するだけで安全性が大きく上がる**ので採用しています。
+なぜ`event.keyCode === 229`も合わせてチェックするのか。一部ブラウザやIME環境では`isComposing`が期待通り取得できない場合があるため、フォールバックとして`keyCode === 229`もチェックしています。実質的な影響は少ないですが、**2行追加するだけで安全性が大きく上がる**ので採用しています。
 
 ### テストでの確認
 
@@ -183,13 +183,13 @@ it("does NOT fire when IME is composing", () => {
 
 ### 問題：mail.google.comでの誤検知
 
-`manifest.json`の`matches`には`https://mail.google.com/*`も含まれています。GmailにはGoogle Chatが統合されており、同じページにGmail作成エリア（メール本文）とGoogle Chatの入力エリアが共存します。
+`manifest.json`の`matches`には`https://mail.google.com/*`も含まれています。Google Workspaceや個人設定によっては、Gmail内でGoogle Chatが統合表示される場合があります。その場合、同じページにGmail作成エリア（メール本文）とGoogle Chatの入力エリアが共存します。
 
 **両方とも`contenteditable`属性を持つDOM要素**なので、単純に「contenteditableかどうか」で判定すると、Gmailでメールを書いているときにも拡張機能が誤作動します。
 
 ### 解決策：data-group-idによるDOM探索
 
-Google ChatがGmailに統合されたパネルには、特定のDOM構造があります。Chatのメッセージ入力エリアの祖先要素のどこかに、**`data-group-id="space/XXXXX"`という属性**が付いています（`space/`から始まるのがChat固有）。
+Google ChatがGmailに統合されたパネルには、特定のDOM構造があります。Chatのメッセージ入力エリアの祖先要素のどこかに、**`data-group-id="space/XXXXX"`という属性**が付いています（現時点では`space/`形式の値がGoogle Chat関連UIで観測されています）。
 
 ```js
 function isInsideChatPanel(target) {
@@ -219,7 +219,7 @@ function isGoogleChatInput(target) {
     return isInsideChatPanel(target);
   }
 
-  // chat.google.com はすべてChatなので追加判定不要
+  // chat.google.com では主要な編集可能要素の多くがChat関連UIであるため追加判定不要
   return true;
 }
 ```
@@ -232,7 +232,7 @@ function isGoogleChatInput(target) {
 
 ### なぜ`data-group-id`が使えるのか
 
-これはGoogle ChatがGmail内でチャットルームを識別するために使っている内部属性です。`space/AAQAJ4YAvpc`のようなGoogle ChatのSpaceIDが入っています。外部APIで公開されている値ではありませんが、DOM構造は安定しており実用上問題ありません（もし変わったらコードを更新するだけです）。
+これはGoogle ChatがGmail内でチャットルームを識別するために使っている内部属性です。`space/AAQAJ4YAvpc`のようなGoogle ChatのSpaceIDが入っています。外部APIで公開されている値ではなく、この判定はGoogle Chatの内部DOM属性に依存しているため、将来的なUI変更で無効になる可能性があります。そのため定期的なDOM確認は必要です。
 
 ---
 
@@ -240,7 +240,7 @@ function isGoogleChatInput(target) {
 
 ### chrome.storage.syncでリアルタイム同期
 
-設定の永続化には`chrome.storage.sync`を使います。同期ストレージなので、Googleアカウントでログインしていれば複数デバイス間で自動同期されます。
+設定の永続化には`chrome.storage.sync`を使います。Chrome同期が有効な環境では、複数デバイス間で設定が同期される場合があります。
 
 ```js
 // 設定を保存
@@ -267,7 +267,7 @@ chrome.storage.onChanged.addListener(onStorageChanged);
 
 ### プラットフォーム別ラベル表示
 
-MacではCtrlキーが`⌘`、AltキーがOptionキー（`⌥`）です。ポップアップのラベルをOSに応じて動的に変えています。
+macOSではショートカット操作にCommand（`⌘`）キーが一般的なため、`Ctrl+Enter`設定は`⌘+Enter`として扱っています。また`Alt+Enter`はOptionキー（`⌥`）として表示しています。ポップアップのラベルをOSに応じて動的に変えています。
 
 ```js
 function getPlatformKeyLabels() {
@@ -284,14 +284,14 @@ function getPlatformKeyLabels() {
 }
 ```
 
-OS判定は`navigator.userAgentData`（Chrome 90+の新API）を優先し、jsdomなど旧環境では`navigator.platform`の正規表現マッチにフォールバックします。
+OS判定は対応ブラウザで`navigator.userAgentData`を優先し、利用できない環境では`navigator.platform`の正規表現マッチにフォールバックします。
 
 > 📸 **画像④：動作デモGIF**  
 > *拡張機能なし（Enter送信）→ 拡張機能あり（Enter改行・Shift+Enter送信）*
 
 ---
 
-## テスト戦略：Chrome APIなしでユニットテスト
+## テスト戦略：Chrome APIをモック化してユニットテスト
 
 Chrome拡張機能のコードをテストするのは一筋縄ではいきません。`chrome.storage`などのAPIはChrome環境にしか存在しないからです。
 
@@ -315,7 +315,7 @@ if (typeof module !== "undefined") {
 }
 ```
 
-`module`が定義されている（=Node.js/Jest環境）ときは関数をエクスポートし、そうでない（=ブラウザ）ときは`init()`を呼ぶ。このパターンにより、同一ファイルがブラウザでもテスト環境でも動作します。
+`module`が定義されている（=Node.js/Jest環境）ときは関数をエクスポートし、そうでない（=ブラウザ）ときは`init()`を呼ぶ。CommonJSベースのテスト環境では、同一ファイルをブラウザ用コードとテストコードで共有できます。
 
 ### jest.resetModules()でモジュール状態を分離
 
@@ -402,7 +402,7 @@ jobs:
           files: extension.zip
 ```
 
-`manifest.json + src/ + icons/`の3点セットをzipにするだけで、そのままChromeウェブストアにアップロードできる形式になります。
+`manifest.json + src/ + icons/`の3点セットをzipにするだけで、Chrome Web Storeに提出可能な基本パッケージ形式になります。
 
 ---
 
@@ -416,7 +416,7 @@ jobs:
 | IMEの変換確定Enterを無視したい | `event.isComposing`チェック（旧ブラウザ向けに`keyCode 229`も） |
 | GmailでChat入力とメール作成を区別したい | 祖先要素の`data-group-id="space/..."`をDOM探索 |
 | ページリロードなしで設定を反映したい | `chrome.storage.onChanged`でコンテンツスクリプトをリアクティブに更新 |
-| Chrome APIなしでユニットテストしたい | CommonJS条件エクスポート＋`jest.resetModules()`でモジュール状態分離 |
+| Chrome APIをモック化してユニットテストしたい | CommonJS条件エクスポート＋`jest.resetModules()`でモジュール状態分離 |
 
 細かい部分まで含めると、「ただEnterキーを止めて改行する」だけのシンプルな拡張機能でも、日本語入力・マルチページ対応・クロスプラットフォーム・テスタビリティと、考えることは多いことがわかりました。
 
