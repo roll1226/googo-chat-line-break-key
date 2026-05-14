@@ -171,13 +171,6 @@ function buildHtml(popupBase64) {
         改行と送信の<span class="highlight">ストレス解消</span>を<br>
         目指した拡張機能開発
       </div>
-      <div class="tags">
-        <span class="tag">Manifest V3</span>
-        <span class="tag">keydown capture</span>
-        <span class="tag">IME対応</span>
-        <span class="tag">Gmail統合</span>
-        <span class="tag">execCommand</span>
-      </div>
     </div>
 
     <!-- Right: popup screenshot -->
